@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Google CSE Batch Image Search</title>
+<style>
+body { font-family: Arial, sans-serif; padding: 20px; }
+textarea { width: 100%; height: 140px; font-size: 14px; }
+button { margin-top: 10px; padding: 8px 18px; font-size: 14px; cursor: pointer; }
+table { margin-top: 20px; width: 100%; border-collapse: collapse; }
+th, td { border: 1px solid #ccc; padding: 6px; text-align: center; }
+th { background: #f4f4f4; }
+td.query { font-weight: bold; max-width: 220px; word-break: break-word; }
+img { max-width: 140px; max-height: 100px; border-radius: 4px; cursor: pointer; }
+img:hover { outline: 2px solid red; }
+</style>
+</head>
+<body>
+
+<h2>Google CSE Batch Image Search</h2>
+<p>Каждый запрос — с новой строки</p>
+
+<textarea id="queries" placeholder="BMW X5&#10;iPhone 15&#10;Sony A7"></textarea>
+<br>
+<button onclick="search()">Искать</button>
+
+<table>
+<thead>
+<tr>
+  <th>Запрос</th>
+  <th>1</th>
+  <th>2</th>
+  <th>3</th>
+  <th>4</th>
+  <th>5</th>
+</tr>
+</thead>
+<tbody id="resultBody"></tbody>
+</table>
+
+<script>
+async function search() {
+  const queries = document.getElementById("queries").value
+    .split("\n")
+    .map(q => q.trim())
+    .filter(q => q);
+
+  if (!queries.length) { alert("Введите запросы"); return; }
+
+  const tbody = document.getElementById("resultBody");
+  tbody.innerHTML = "";
+
+  try {
+    const res = await fetch("/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ queries })
+    });
+
+    const data = await res.json();
+
+    queries.forEach(q => {
+      const tr = document.createElement("tr");
+
+      const tdQ = document.createElement("td");
+      tdQ.className = "query";
+      tdQ.textContent = q;
+      tr.appendChild(tdQ);
+
+      const imgs = data[q] || [];
+      for (let i = 0; i < 5; i++) {
+        const td = document.createElement("td");
+        if (imgs[i]) {
+          const img = document.createElement("img");
+          img.src = imgs[i];
+          td.appendChild(img);
+        }
+        tr.appendChild(td);
+      }
+
+      tbody.appendChild(tr);
+    });
+
+  } catch (e) {
+    alert("Ошибка при запросе к серверу");
+    console.error(e);
+  }
+}
+</script>
+
+</body>
+</html>
