@@ -36,7 +36,7 @@ func getImages(query string, limit int) ([]string, error) {
 	}
 
 	searchURL := fmt.Sprintf(
-		"https://www.googleapis.com/customsearch/v1?key=%s&cx=%s&q=%s&searchType=image&num=%d",
+		"https://www.googleapis.com/customsearch/v1?key=%s&cx=%s&q=%s&searchType=image&num=%d&imgType=photo&imgSize=large&imgColorType=color&safe=off",
 		key, cx, url.QueryEscape(query), limit,
 	)
 
@@ -88,6 +88,7 @@ func batchHandler(w http.ResponseWriter, r *http.Request) {
 		if query == "" {
 			continue
 		}
+		query = query + "photo"
 
 		wg.Add(1)
 		go func(q string) {
