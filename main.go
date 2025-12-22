@@ -13,7 +13,8 @@ import (
 )
 
 type BatchRequest struct {
-	Queries []string `json:"queries"`
+	Queries    []string `json:"queries"`
+	Categories []string `json:"categories"`
 }
 
 type GoogleResponse struct {
@@ -28,43 +29,95 @@ func enableCORS(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
 }
 
-func getImages(query string, limit int) ([]string, error) {
-	cx := os.Getenv("GOOGLE_CX")
-	key := os.Getenv("GOOGLE_KEY")
-	if cx == "" || key == "" {
-		return nil, fmt.Errorf("GOOGLE_CX or GOOGLE_KEY not set")
-	}
+/* =========================
+   GOOGLE KEY POOL
+========================= */
 
-	searchURL := fmt.Sprintf(
-		"https://www.googleapis.com/customsearch/v1?key=%s&cx=%s&q=%s&searchType=image&num=%d&imgType=photo&imgSize=large&imgColorType=color&safe=off",
-		key, cx, url.QueryEscape(query), limit,
-	)
+var (
+	googleKeys []string
+	keyIndex   int
+	keyMu      sync.Mutex
+)
 
-	resp, err := http.Get(searchURL)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		body, _ := ioutil.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Google API error: %s", string(body))
-	}
-
-	body, _ := ioutil.ReadAll(resp.Body)
-
-	var data GoogleResponse
-	if err := json.Unmarshal(body, &data); err != nil {
-		return nil, err
-	}
-
-	images := []string{}
-	for _, item := range data.Items {
-		images = append(images, item.Link)
-	}
-
-	return images, nil
+func nextKey() string {
+	keyMu.Lock()
+	defer keyMu.Unlock()
+	key := googleKeys[keyIndex]
+	keyIndex = (keyIndex + 1) % len(googleKeys)
+	return key
 }
+
+/* =========================
+   CATEGORY → CX MAP
+========================= */
+
+var categoryCX = map[string]string{
+	"Недвижимость":           "CX_REAL_ESTATE",
+	"Транспорт":              "CX_TRANSPORT",
+	"Спец/сельхоз техника":   "CX_SPECIAL_TECH",
+	"Оборудование":           "CX_EQUIPMENT",
+	"Строительство и ремонт": "CX_CONSTRUCTION",
+	"Бизнес":                 "CX_BUSINESS",
+	"Одежда и обувь":         "CX_FASHION",
+	"Товары для дома":        "CX_HOME_GOODS",
+	"Бытовая и оргтехника":   "CX_ELECTRONICS",
+	"Иное":                   "CX_MISC",
+}
+
+/* =========================
+   GOOGLE IMAGE SEARCH
+========================= */
+
+func getImages(query, cx string, limit int) ([]string, error) {
+	for i := 0; i < len(googleKeys); i++ {
+		key := nextKey()
+
+		searchURL := fmt.Sprintf(
+			"https://www.googleapis.com/customsearch/v1?"+
+				"key=%s&cx=%s&q=%s&searchType=image"+
+				"&num=%d&imgType=photo&imgSize=large"+
+				"&imgColorType=color",
+			key,
+			cx,
+			url.QueryEscape(query),
+			limit,
+		)
+
+		client := &http.Client{Timeout: 20 * time.Second}
+		resp, err := client.Get(searchURL)
+		if err != nil {
+			continue
+		}
+
+		body, _ := ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode == 429 || strings.Contains(string(body), "quota") {
+			continue // переключаем ключ
+		}
+
+		if resp.StatusCode != 200 {
+			return nil, fmt.Errorf("google error: %s", body)
+		}
+
+		var data GoogleResponse
+		if err := json.Unmarshal(body, &data); err != nil {
+			return nil, err
+		}
+
+		var images []string
+		for _, item := range data.Items {
+			images = append(images, item.Link)
+		}
+		return images, nil
+	}
+
+	return nil, fmt.Errorf("all GOOGLE_KEYS exhausted")
+}
+
+/* =========================
+   BATCH HANDLER
+========================= */
 
 func batchHandler(w http.ResponseWriter, r *http.Request) {
 	enableCORS(w)
@@ -78,34 +131,45 @@ func batchHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(req.Queries) != len(req.Categories) {
+		http.Error(w, "queries and categories count mismatch", 400)
+		return
+	}
+
 	results := make(map[string][]string)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 4) // параллелизм
+	sem := make(chan struct{}, 4)
 
-	for _, q := range req.Queries {
-		query := strings.TrimSpace(q)
-		if query == "" {
+	for i := range req.Queries {
+		query := strings.TrimSpace(req.Queries[i])
+		category := strings.TrimSpace(req.Categories[i])
+
+		cxEnv, ok := categoryCX[category]
+		if !ok {
 			continue
 		}
-		query = query + "photo"
+
+		cx := os.Getenv(cxEnv)
+		if cx == "" {
+			continue
+		}
 
 		wg.Add(1)
-		go func(q string) {
+		go func(q, cx string) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			imgs, err := getImages(q, 5)
+			imgs, err := getImages(q+" photo", cx, 5)
 			if err == nil {
 				mu.Lock()
 				results[q] = imgs
 				mu.Unlock()
-			} else {
-				fmt.Println("Error for query:", q, err)
 			}
-			time.Sleep(300 * time.Millisecond) // анти-бан
-		}(query)
+
+			time.Sleep(1000 * time.Millisecond)
+		}(query, cx)
 	}
 
 	wg.Wait()
@@ -113,7 +177,17 @@ func batchHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(results)
 }
 
+/* =========================
+   MAIN
+========================= */
+
 func main() {
+	keys := os.Getenv("GOOGLE_KEYS")
+	if keys == "" {
+		panic("GOOGLE_KEYS not set")
+	}
+	googleKeys = strings.Split(keys, ",")
+
 	http.Handle("/", http.FileServer(http.Dir("./static")))
 	http.HandleFunc("/batch", batchHandler)
 

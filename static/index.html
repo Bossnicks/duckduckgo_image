@@ -3,10 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <title>Google CSE Batch Image Search</title>
+
 <style>
 body { font-family: Arial, sans-serif; padding: 20px; }
-textarea { width: 100%; height: 140px; font-size: 14px; }
-button { margin-top: 10px; padding: 8px 18px; font-size: 14px; cursor: pointer; }
+textarea { width: 100%; height: 120px; font-size: 14px; margin-bottom: 10px; }
+button { padding: 8px 18px; font-size: 14px; cursor: pointer; }
 table { margin-top: 20px; width: 100%; border-collapse: collapse; }
 th, td { border: 1px solid #ccc; padding: 6px; text-align: center; }
 th { background: #f4f4f4; }
@@ -14,14 +15,18 @@ td.query { font-weight: bold; max-width: 220px; word-break: break-word; }
 img { max-width: 140px; max-height: 100px; border-radius: 4px; cursor: pointer; }
 img:hover { outline: 2px solid red; }
 </style>
+
 </head>
 <body>
 
 <h2>Google CSE Batch Image Search</h2>
-<p>Каждый запрос — с новой строки</p>
 
+<p>Запросы (1 строка = 1 запрос)</p>
 <textarea id="queries" placeholder="BMW X5&#10;iPhone 15&#10;Sony A7"></textarea>
-<br>
+
+<p>Категории (строго 1-к-1)</p>
+<textarea id="categories" placeholder="cars&#10;phones&#10;cameras"></textarea>
+
 <button onclick="search()">Искать</button>
 
 <table>
@@ -41,11 +46,20 @@ img:hover { outline: 2px solid red; }
 <script>
 async function search() {
   const queries = document.getElementById("queries").value
-    .split("\n")
-    .map(q => q.trim())
-    .filter(q => q);
+    .split("\n").map(q => q.trim()).filter(Boolean);
 
-  if (!queries.length) { alert("Введите запросы"); return; }
+  const categories = document.getElementById("categories").value
+    .split("\n").map(c => c.trim()).filter(Boolean);
+
+  if (!queries.length) {
+    alert("Введите запросы");
+    return;
+  }
+
+  if (queries.length !== categories.length) {
+    alert("Количество запросов и категорий должно совпадать");
+    return;
+  }
 
   const tbody = document.getElementById("resultBody");
   tbody.innerHTML = "";
@@ -54,7 +68,7 @@ async function search() {
     const res = await fetch("/batch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ queries })
+      body: JSON.stringify({ queries, categories })
     });
 
     const data = await res.json();
